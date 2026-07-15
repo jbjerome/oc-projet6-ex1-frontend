@@ -1,0 +1,10 @@
+services:
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: olympic-participation-tracker
+    ports:
+      - "80:80"
+    restart: unless-stopped
