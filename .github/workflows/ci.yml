@@ -1,0 +1,171 @@
+name: CI
+
+# Workflow générique : le même fichier fonctionne pour l'application Angular
+# et pour l'application Spring Boot. Le type de projet est détecté à l'exécution
+# à partir des fichiers présents dans le dépôt.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1 : exécution des tests unitaires + publication du rapport JUnit
+  # ---------------------------------------------------------------------------
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Détection du type de projet
+        id: detect
+        run: |
+          if [ -f build.gradle ] || [ -f gradlew ]; then
+            echo "type=java" >> "$GITHUB_OUTPUT"
+            echo "Projet Spring Boot / Gradle détecté"
+          elif [ -f package.json ]; then
+            echo "type=node" >> "$GITHUB_OUTPUT"
+            echo "Projet Angular / npm détecté"
+          else
+            echo "::error::Type de projet non reconnu"
+            exit 1
+          fi
+
+      - name: Configuration du JDK 21 (Java)
+        if: steps.detect.outputs.type == 'java'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Configuration de Node.js (Angular)
+        if: steps.detect.outputs.type == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Exécution des tests
+        run: |
+          chmod +x run-tests.sh
+          ./run-tests.sh
+
+      - name: Publication du rapport de tests
+        if: always()
+        uses: mikepenz/action-junit-report@v5
+        with:
+          report_paths: 'test-results/*.xml'
+          check_name: Rapport de tests
+          fail_on_failure: false
+
+      - name: Archivage des rapports de tests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # Job 2 : construction de l'image Docker et publication sur GHCR
+  #         Tag : <nom-de-branche>-<sha-court>
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build & Push image
+    needs: test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configuration de Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Connexion au GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Préparation des variables d'image
+        id: vars
+        run: |
+          # Nom d'image en minuscules (contrainte GHCR)
+          image="${REGISTRY}/${GITHUB_REPOSITORY,,}"
+          # Tag lisible : nom de branche (slashes remplacés) + SHA court
+          branch="${GITHUB_REF_NAME//\//-}"
+          sha_short="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          echo "tag=${branch}-${sha_short}" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push de l'image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---------------------------------------------------------------------------
+  # Job 3 : release automatique via semantic-release (Conventional Commits)
+  #         Déclenché uniquement sur la branche main.
+  #         Génère la release GitHub + le changelog, synchronise la version
+  #         dans les fichiers du projet et publie l'image taguée X.Y.Z.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Release
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configuration de Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Connexion au GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Image cible en minuscules, exposée à @semantic-release/exec
+          export IMAGE="$(echo "${REGISTRY}/${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          npx --yes \
+            -p semantic-release@24 \
+            -p @semantic-release/commit-analyzer \
+            -p @semantic-release/release-notes-generator \
+            -p @semantic-release/changelog \
+            -p @semantic-release/git \
+            -p @semantic-release/exec \
+            -p @semantic-release/github \
+            -p @semantic-release/npm \
+            semantic-release

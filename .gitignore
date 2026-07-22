@@ -40,3 +40,10 @@ testem.log
 # System files
 .DS_Store
 Thumbs.db
+
+# Artefacts de tests (run-tests.sh)
+/test-results
+/reports
+
+# Cache npm local (run-tests.sh / Dockerfile : npm ci --cache .npm)
+/.npm

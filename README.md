@@ -86,3 +86,32 @@ To publish the application to a GitLab registry, follow these steps:
    npm publish
    ```
    This will publish the package to your GitLab registry.
+
+## Intégration et livraison continues (CI/CD)
+
+Le dépôt embarque un pipeline GitHub Actions générique (`.github/workflows/ci.yml`) identique à celui de l'autre application : il détecte automatiquement le type de projet (Angular / npm ou Spring Boot / Gradle) et se compose de trois jobs.
+
+### Script de tests unifié
+
+`run-tests.sh` (à la racine) détecte le type de projet, vérifie les dépendances, nettoie les artefacts précédents, exécute les tests et produit un rapport JUnit XML dans `test-results/`. Il propage le code de sortie du lanceur de tests (0 = succès).
+
+```bash
+./run-tests.sh
+```
+
+### Jobs du workflow
+
+- **test** : exécute `run-tests.sh`, met en cache les dépendances (npm / Gradle) et publie le rapport JUnit dans le workflow.
+- **build** : construit l'image Docker et la pousse sur le GitHub Container Registry (`ghcr.io`), taguée `<branche>-<sha-court>`.
+- **release** : sur `main` uniquement, exécute `semantic-release` pour générer la version, le changelog et la release GitHub, synchroniser la version dans `package.json` et publier l'image taguée avec la version sémantique (`X.Y.Z`).
+
+### Convention de commits (Conventional Commits)
+
+Les versions sont calculées automatiquement par `semantic-release` à partir des messages de commit, qui doivent respecter la convention [Conventional Commits](https://www.conventionalcommits.org/) :
+
+- `fix: ...` → version *patch* (1.0.0 → 1.0.1)
+- `feat: ...` → version *mineure* (1.0.0 → 1.1.0)
+- `feat!: ...` ou `BREAKING CHANGE:` dans le corps → version *majeure* (1.0.0 → 2.0.0)
+- `chore:`, `docs:`, `test:`, `refactor:`, `ci:` → pas de release
+
+Exemple : `feat(dashboard): ajoute le graphique des médailles par pays`
