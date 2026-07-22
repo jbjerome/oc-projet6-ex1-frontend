@@ -14,7 +14,7 @@
     [
       "@semantic-release/exec",
       {
-        "publishCmd": "docker build -t ${IMAGE}:${nextRelease.version} . && docker push ${IMAGE}:${nextRelease.version}"
+        "publishCmd": "docker build -t $IMAGE:${nextRelease.version} . && docker push $IMAGE:${nextRelease.version}"
       }
     ],
     [
